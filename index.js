@@ -927,6 +927,7 @@ client.on('interactionCreate', async (interaction) => {
             
             setTimeout(() => {
                 console.log('Restarting bot...');
+                // For Replit: process.exit(0) triggers automatic restart
                 process.exit(0);
             }, 2000);
         }
