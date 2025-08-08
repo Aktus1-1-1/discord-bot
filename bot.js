@@ -1873,21 +1873,7 @@ if (!process.env.DISCORD_TOKEN) {
     process.exit(1);
 }
 
-// Keep-alive HTTP server for Render.com Web Service
-const http = require('http');
-const server = http.createServer((req, res) => {
-    res.writeHead(200, {'Content-Type': 'application/json'});
-    res.end(JSON.stringify({
-        status: 'Bot is running!',
-        uptime: process.uptime(),
-        commands: 34
-    }));
-});
-
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-    console.log(`Keep-alive server running on port ${PORT}`);
-});
+// Bot file - no HTTP server needed
 
 client.login(process.env.DISCORD_TOKEN).catch((error) => {
     console.error('Failed to login:', error);

@@ -4,8 +4,8 @@
   "description": "A Discord bot with ping, joke, and meme commands",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js",
-    "dev": "node index.js"
+    "start": "node keep-alive.js",
+    "dev": "node keep-alive.js"
   },
   "keywords": ["discord", "bot", "discord.js"],
   "author": "",
