@@ -1872,18 +1872,6 @@ if (!process.env.DISCORD_TOKEN) {
     process.exit(1);
 }
 
-// Add simple HTTP server for Render.com
-const http = require('http');
-const server = http.createServer((req, res) => {
-    res.writeHead(200, {'Content-Type': 'text/plain'});
-    res.end('Discord bot is running!');
-});
-
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-    console.log(`HTTP server running on port ${PORT}`);
-});
-
 client.login(process.env.DISCORD_TOKEN).catch((error) => {
     console.error('Failed to login:', error);
     process.exit(1);
