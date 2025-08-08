@@ -353,10 +353,6 @@ const commands = [
                 .setRequired(true))
         .setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
         
-    new SlashCommandBuilder()
-        .setName('restart')
-        .setDescription('Restart the bot (Admin only)')
-        .setDefaultMemberPermissions(PermissionFlagsBits.Administrator),
         
     new SlashCommandBuilder()
         .setName('viewers')
@@ -611,38 +607,6 @@ async function registerCommands() {
 client.once('ready', async () => {
     console.log(`Logged in as ${client.user.tag}!`);
     await registerCommands();
-    
-    // Zkontroluj, jestli byla restart zpráva
-    try {
-        const restartInfo = JSON.parse(await fs.readFile('restart-info.json', 'utf8'));
-        if (restartInfo.needsRestartMessage) {
-            const channel = await client.channels.fetch(restartInfo.channelId);
-            if (channel) {
-                const embed = {
-                    color: 0x00ff00,
-                    title: '✅ Bot Successfully Restarted',
-                    description: `Bot byl úspěšně restartován!`,
-                    fields: [
-                        { name: 'Restart Time', value: `<t:${Math.floor(Date.now() / 1000)}:R>`, inline: true },
-                        { name: 'Requested by', value: `<@${restartInfo.userId}>`, inline: true }
-                    ],
-                    footer: { text: 'Bot is back online and ready!' }
-                };
-                
-                await channel.send({ embeds: [embed] });
-            }
-            
-            // Reset restart info
-            await fs.writeFile('restart-info.json', JSON.stringify({
-                needsRestartMessage: false,
-                channelId: null,
-                userId: null,
-                timestamp: null
-            }));
-        }
-    } catch (error) {
-        // Ignore errors - restart-info.json might not exist yet
-    }
 });
 
 client.on('interactionCreate', async (interaction) => {
@@ -890,46 +854,6 @@ client.on('interactionCreate', async (interaction) => {
                     ephemeral: true
                 });
             }
-        }
-        
-        else if (commandName === 'restart') {
-            if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
-                await interaction.reply({
-                    content: '❌ You need Administrator permissions to restart the bot!',
-                    ephemeral: true
-                });
-                return;
-            }
-            
-            const embed = {
-                color: 0xff6b00,
-                title: '🔄 Bot Restart',
-                description: 'Bot is restarting... Please wait a moment.',
-                footer: { text: `Requested by ${interaction.user.username}` },
-                timestamp: new Date().toISOString()
-            };
-            
-            await interaction.reply({ embeds: [embed] });
-            
-            console.log(`Bot restart requested by ${interaction.user.tag}`);
-            
-            // Ulož informace o restartu
-            try {
-                await fs.writeFile('restart-info.json', JSON.stringify({
-                    needsRestartMessage: true,
-                    channelId: interaction.channel.id,
-                    userId: interaction.user.id,
-                    timestamp: Date.now()
-                }));
-            } catch (error) {
-                console.error('Error saving restart info:', error);
-            }
-            
-            setTimeout(() => {
-                console.log('Restarting bot...');
-                // For Replit: process.exit(0) triggers automatic restart  
-                process.exit(0);
-            }, 1000); // Rychlejší restart
         }
         
         else if (commandName === 'viewers') {
