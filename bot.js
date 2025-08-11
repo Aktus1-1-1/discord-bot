@@ -39,6 +39,49 @@ const memes = [
 ];
 
 const activeGiveaways = new Map();
+const activeReminders = new Map();
+const activeTimers = new Map();
+
+// Economy system
+const userEconomy = new Map(); // Stores user data: { userId: { coins, dailyLastClaimed, workLastUsed, job } }
+const DAILY_REWARD = 100;
+const WORK_COOLDOWN = 30 * 60 * 1000; // 30 minutes
+
+const jobs = [
+    { name: 'Pizza Delivery', minPay: 15, maxPay: 35, emoji: '🍕' },
+    { name: 'Streamer', minPay: 10, maxPay: 50, emoji: '🎬' },
+    { name: 'Programmer', minPay: 20, maxPay: 80, emoji: '💻' },
+    { name: 'Teacher', minPay: 25, maxPay: 45, emoji: '👨‍🏫' },
+    { name: 'Doctor', minPay: 40, maxPay: 100, emoji: '👨‍⚕️' },
+    { name: 'Uber Driver', minPay: 12, maxPay: 28, emoji: '🚗' },
+    { name: 'YouTuber', minPay: 5, maxPay: 200, emoji: '📹' },
+    { name: 'Chef', minPay: 18, maxPay: 42, emoji: '👨‍🍳' }
+];
+
+function getUser(userId) {
+    if (!userEconomy.has(userId)) {
+        userEconomy.set(userId, {
+            coins: 50, // starting coins
+            dailyLastClaimed: null,
+            workLastUsed: null,
+            job: null
+        });
+    }
+    return userEconomy.get(userId);
+}
+
+function saveUser(userId, data) {
+    userEconomy.set(userId, data);
+}
+
+function formatCoins(amount) {
+    return `${amount.toLocaleString()} 🪙`;
+}
+
+function isOnCooldown(lastUsed, cooldown) {
+    if (!lastUsed) return false;
+    return Date.now() - lastUsed < cooldown;
+}
 
 function formatDuration(ms) {
     const seconds = Math.floor(ms / 1000) % 60;
@@ -271,7 +314,11 @@ const commands = [
                 .addStringOption(option =>
                     option.setName('prize')
                         .setDescription('What is the prize?')
-                        .setRequired(true)))
+                        .setRequired(true))
+                .addIntegerOption(option =>
+                    option.setName('coins')
+                        .setDescription('Amount of coins to award to winner (optional)')
+                        .setRequired(false)))
         .addSubcommand(subcommand =>
             subcommand
                 .setName('end')
@@ -579,6 +626,69 @@ const commands = [
         .addStringOption(option =>
             option.setName('ip')
                 .setDescription('IP address to lookup')
+                .setRequired(true)),
+                
+    // Economy Commands
+    new SlashCommandBuilder()
+        .setName('balance')
+        .setDescription('Check your coin balance')
+        .addUserOption(option =>
+            option.setName('user')
+                .setDescription('Check another user\'s balance')
+                .setRequired(false)),
+                
+    new SlashCommandBuilder()
+        .setName('daily')
+        .setDescription('Claim your daily coins'),
+        
+    new SlashCommandBuilder()
+        .setName('work')
+        .setDescription('Work to earn coins'),
+        
+    new SlashCommandBuilder()
+        .setName('pay')
+        .setDescription('Pay coins to another user')
+        .addUserOption(option =>
+            option.setName('user')
+                .setDescription('User to pay')
+                .setRequired(true))
+        .addIntegerOption(option =>
+            option.setName('amount')
+                .setDescription('Amount of coins to pay')
+                .setMinValue(1)
+                .setRequired(true)),
+                
+    new SlashCommandBuilder()
+        .setName('job')
+        .setDescription('Manage your job')
+        .addSubcommand(subcommand =>
+            subcommand
+                .setName('list')
+                .setDescription('View available jobs'))
+        .addSubcommand(subcommand =>
+            subcommand
+                .setName('apply')
+                .setDescription('Apply for a job')
+                .addStringOption(option =>
+                    option.setName('job_name')
+                        .setDescription('Name of the job')
+                        .setRequired(true)))
+        .addSubcommand(subcommand =>
+            subcommand
+                .setName('quit')
+                .setDescription('Quit your current job')),
+                
+    new SlashCommandBuilder()
+        .setName('leaderboard')
+        .setDescription('Show richest users'),
+        
+    new SlashCommandBuilder()
+        .setName('gamble')
+        .setDescription('Gamble your coins')
+        .addIntegerOption(option =>
+            option.setName('amount')
+                .setDescription('Amount to gamble')
+                .setMinValue(10)
                 .setRequired(true))
 ];
 
@@ -590,7 +700,13 @@ async function registerCommands() {
         
         const guildId = '1374372067536801812'; // Tvůj Guild ID
         
-        console.log('Registering slash commands to guild...');
+        // Vymaž všechny příkazy
+        await rest.put(
+            Routes.applicationGuildCommands(client.user.id, guildId),
+            { body: [] },
+        );
+        
+        console.log('Registering new slash commands to guild...');
         
         // Zaregistruj příkazy do guild (bez mazání)
         await rest.put(
@@ -1626,12 +1742,302 @@ client.on('interactionCreate', async (interaction) => {
             }
         }
         
+        else if (commandName === 'balance') {
+            const targetUser = interaction.options.getUser('user') || interaction.user;
+            const userData = getUser(targetUser.id);
+            
+            const embed = {
+                color: 0xffd700,
+                title: '💰 Coin Balance',
+                description: `${targetUser.username} has ${formatCoins(userData.coins)}`,
+                thumbnail: { url: targetUser.displayAvatarURL() },
+                fields: []
+            };
+            
+            if (userData.job) {
+                embed.fields.push({
+                    name: 'Current Job',
+                    value: `${jobs.find(j => j.name === userData.job)?.emoji} ${userData.job}`,
+                    inline: true
+                });
+            }
+            
+            await interaction.reply({ embeds: [embed] });
+        }
+        
+        else if (commandName === 'daily') {
+            const userData = getUser(interaction.user.id);
+            const now = Date.now();
+            const oneDay = 24 * 60 * 60 * 1000;
+            
+            if (userData.dailyLastClaimed && now - userData.dailyLastClaimed < oneDay) {
+                const timeLeft = oneDay - (now - userData.dailyLastClaimed);
+                const hoursLeft = Math.floor(timeLeft / (60 * 60 * 1000));
+                const minutesLeft = Math.floor((timeLeft % (60 * 60 * 1000)) / (60 * 1000));
+                
+                await interaction.reply({
+                    content: `⏰ Daily reward already claimed! Next reward in ${hoursLeft}h ${minutesLeft}m`,
+                    ephemeral: true
+                });
+                return;
+            }
+            
+            userData.coins += DAILY_REWARD;
+            userData.dailyLastClaimed = now;
+            saveUser(interaction.user.id, userData);
+            
+            const embed = {
+                color: 0x00ff00,
+                title: '🎁 Daily Reward',
+                description: `You claimed your daily reward of ${formatCoins(DAILY_REWARD)}!`,
+                fields: [
+                    { name: 'New Balance', value: formatCoins(userData.coins), inline: true }
+                ]
+            };
+            
+            await interaction.reply({ embeds: [embed] });
+        }
+        
+        else if (commandName === 'work') {
+            const userData = getUser(interaction.user.id);
+            
+            if (!userData.job) {
+                await interaction.reply({
+                    content: '❌ You need a job first! Use `/job list` to see available jobs and `/job apply <job_name>` to get one.',
+                    ephemeral: true
+                });
+                return;
+            }
+            
+            if (isOnCooldown(userData.workLastUsed, WORK_COOLDOWN)) {
+                const timeLeft = WORK_COOLDOWN - (Date.now() - userData.workLastUsed);
+                const minutesLeft = Math.floor(timeLeft / (60 * 1000));
+                
+                await interaction.reply({
+                    content: `⏰ You're tired! Rest for ${minutesLeft} more minutes before working again.`,
+                    ephemeral: true
+                });
+                return;
+            }
+            
+            const job = jobs.find(j => j.name === userData.job);
+            const earned = Math.floor(Math.random() * (job.maxPay - job.minPay + 1)) + job.minPay;
+            
+            userData.coins += earned;
+            userData.workLastUsed = Date.now();
+            saveUser(interaction.user.id, userData);
+            
+            const workMessages = [
+                'completed your shift',
+                'finished your tasks',
+                'did great work today',
+                'exceeded expectations',
+                'had a productive day'
+            ];
+            
+            const embed = {
+                color: 0x0099ff,
+                title: `${job.emoji} Work Complete`,
+                description: `You ${workMessages[Math.floor(Math.random() * workMessages.length)]} as a **${job.name}** and earned ${formatCoins(earned)}!`,
+                fields: [
+                    { name: 'New Balance', value: formatCoins(userData.coins), inline: true },
+                    { name: 'Next Work', value: 'Available in 30 minutes', inline: true }
+                ]
+            };
+            
+            await interaction.reply({ embeds: [embed] });
+        }
+        
+        else if (commandName === 'pay') {
+            const targetUser = interaction.options.getUser('user');
+            const amount = interaction.options.getInteger('amount');
+            
+            if (targetUser.bot) {
+                await interaction.reply({
+                    content: '❌ You cannot pay bots!',
+                    ephemeral: true
+                });
+                return;
+            }
+            
+            if (targetUser.id === interaction.user.id) {
+                await interaction.reply({
+                    content: '❌ You cannot pay yourself!',
+                    ephemeral: true
+                });
+                return;
+            }
+            
+            const senderData = getUser(interaction.user.id);
+            const receiverData = getUser(targetUser.id);
+            
+            if (senderData.coins < amount) {
+                await interaction.reply({
+                    content: `❌ You don't have enough coins! You have ${formatCoins(senderData.coins)}`,
+                    ephemeral: true
+                });
+                return;
+            }
+            
+            senderData.coins -= amount;
+            receiverData.coins += amount;
+            saveUser(interaction.user.id, senderData);
+            saveUser(targetUser.id, receiverData);
+            
+            const embed = {
+                color: 0x00ff00,
+                title: '💸 Payment Sent',
+                description: `${interaction.user.username} paid ${formatCoins(amount)} to ${targetUser.username}`,
+                fields: [
+                    { name: 'Your Balance', value: formatCoins(senderData.coins), inline: true },
+                    { name: `${targetUser.username}'s Balance`, value: formatCoins(receiverData.coins), inline: true }
+                ]
+            };
+            
+            await interaction.reply({ embeds: [embed] });
+        }
+        
+        else if (commandName === 'job') {
+            const subcommand = interaction.options.getSubcommand();
+            
+            if (subcommand === 'list') {
+                const embed = {
+                    color: 0x0099ff,
+                    title: '💼 Available Jobs',
+                    description: 'Choose a job with `/job apply <job_name>`',
+                    fields: jobs.map(job => ({
+                        name: `${job.emoji} ${job.name}`,
+                        value: `Pay: ${job.minPay}-${job.maxPay} coins per work`,
+                        inline: true
+                    }))
+                };
+                
+                await interaction.reply({ embeds: [embed] });
+            }
+            
+            else if (subcommand === 'apply') {
+                const jobName = interaction.options.getString('job_name');
+                const job = jobs.find(j => j.name.toLowerCase() === jobName.toLowerCase());
+                
+                if (!job) {
+                    await interaction.reply({
+                        content: '❌ Job not found! Use `/job list` to see available jobs.',
+                        ephemeral: true
+                    });
+                    return;
+                }
+                
+                const userData = getUser(interaction.user.id);
+                userData.job = job.name;
+                saveUser(interaction.user.id, userData);
+                
+                await interaction.reply({
+                    content: `🎉 Congratulations! You are now working as a **${job.emoji} ${job.name}**!\nUse \`/work\` to earn ${job.minPay}-${job.maxPay} coins every 30 minutes!`
+                });
+            }
+            
+            else if (subcommand === 'quit') {
+                const userData = getUser(interaction.user.id);
+                
+                if (!userData.job) {
+                    await interaction.reply({
+                        content: '❌ You don\'t have a job to quit!',
+                        ephemeral: true
+                    });
+                    return;
+                }
+                
+                const oldJob = userData.job;
+                userData.job = null;
+                saveUser(interaction.user.id, userData);
+                
+                await interaction.reply({
+                    content: `😔 You quit your job as a **${oldJob}**. Use \`/job apply\` to find a new job!`
+                });
+            }
+        }
+        
+        else if (commandName === 'leaderboard') {
+            const allUsers = Array.from(userEconomy.entries())
+                .sort((a, b) => b[1].coins - a[1].coins)
+                .slice(0, 10);
+                
+            if (allUsers.length === 0) {
+                await interaction.reply({
+                    content: '📊 No users in economy yet! Use `/daily` to get started.',
+                    ephemeral: true
+                });
+                return;
+            }
+            
+            const embed = {
+                color: 0xffd700,
+                title: '🏆 Richest Users',
+                description: allUsers.map((user, index) => {
+                    const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`;
+                    return `${medal} <@${user[0]}> - ${formatCoins(user[1].coins)}`;
+                }).join('\n')
+            };
+            
+            await interaction.reply({ embeds: [embed] });
+        }
+        
+        else if (commandName === 'gamble') {
+            const amount = interaction.options.getInteger('amount');
+            const userData = getUser(interaction.user.id);
+            
+            if (userData.coins < amount) {
+                await interaction.reply({
+                    content: `❌ You don't have enough coins! You have ${formatCoins(userData.coins)}`,
+                    ephemeral: true
+                });
+                return;
+            }
+            
+            const winChance = Math.random();
+            const won = winChance > 0.5; // 50% chance to win
+            
+            if (won) {
+                const multiplier = Math.random() * 1.5 + 0.5; // 0.5x to 2x multiplier
+                const winnings = Math.floor(amount * multiplier);
+                userData.coins += winnings;
+                
+                const embed = {
+                    color: 0x00ff00,
+                    title: '🎰 Gambling - WIN!',
+                    description: `🎉 You won ${formatCoins(winnings)}!`,
+                    fields: [
+                        { name: 'Multiplier', value: `${multiplier.toFixed(2)}x`, inline: true },
+                        { name: 'New Balance', value: formatCoins(userData.coins), inline: true }
+                    ]
+                };
+                
+                await interaction.reply({ embeds: [embed] });
+            } else {
+                userData.coins -= amount;
+                
+                const embed = {
+                    color: 0xff0000,
+                    title: '🎰 Gambling - LOSS',
+                    description: `😢 You lost ${formatCoins(amount)}!`,
+                    fields: [
+                        { name: 'New Balance', value: formatCoins(userData.coins), inline: true }
+                    ]
+                };
+                
+                await interaction.reply({ embeds: [embed] });
+            }
+            
+            saveUser(interaction.user.id, userData);
+        }
+        
         else if (commandName === 'giveaway') {
             const subcommand = interaction.options.getSubcommand();
             
             if (subcommand === 'start') {
                 const durationStr = interaction.options.getString('duration');
                 const prize = interaction.options.getString('prize');
+                const coins = interaction.options.getInteger('coins');
                 const duration = parseDuration(durationStr);
                 
                 if (duration === 0) {
@@ -1642,11 +2048,25 @@ client.on('interactionCreate', async (interaction) => {
                     return;
                 }
                 
+                if (coins && coins < 1) {
+                    await interaction.reply({
+                        content: '❌ Coin amount must be at least 1.',
+                        ephemeral: true
+                    });
+                    return;
+                }
+                
                 const endTime = Date.now() + duration;
+                let description = `**Prize:** ${prize}\n`;
+                if (coins) {
+                    description += `**Coin Reward:** ${formatCoins(coins)}\n`;
+                }
+                description += `**Duration:** ${formatDuration(duration)}\n**Ends:** <t:${Math.floor(endTime / 1000)}:R>\n\nReact with 🎉 to enter!`;
+                
                 const giveawayEmbed = {
                     color: 0x00ff00,
                     title: '🎉 GIVEAWAY 🎉',
-                    description: `**Prize:** ${prize}\n**Duration:** ${formatDuration(duration)}\n**Ends:** <t:${Math.floor(endTime / 1000)}:R>\n\nReact with 🎉 to enter!`,
+                    description: description,
                     footer: { text: `Hosted by ${interaction.user.username}` },
                     timestamp: new Date(endTime).toISOString()
                 };
@@ -1659,6 +2079,7 @@ client.on('interactionCreate', async (interaction) => {
                     messageId: giveawayMessage.id,
                     channelId: interaction.channel.id,
                     prize,
+                    coins: coins || null,
                     endTime,
                     hostId: interaction.user.id
                 });
@@ -1700,7 +2121,7 @@ client.on('interactionCreate', async (interaction) => {
                     title: '📋 Active Giveaways',
                     fields: giveaways.map(g => ({
                         name: g.prize,
-                        value: `ID: ${g.messageId}\nEnds: <t:${Math.floor(g.endTime / 1000)}:R>`,
+                        value: `ID: ${g.messageId}\n${g.coins ? `Coins: ${formatCoins(g.coins)}\n` : ''}Ends: <t:${Math.floor(g.endTime / 1000)}:R>`,
                         inline: true
                     }))
                 };
@@ -1733,10 +2154,16 @@ async function endGiveaway(messageId) {
         
         const reaction = giveawayMessage.reactions.cache.get('🎉');
         if (!reaction) {
+            let description = `**Prize:** ${giveaway.prize}\n`;
+            if (giveaway.coins) {
+                description += `**Coin Reward:** ${formatCoins(giveaway.coins)}\n`;
+            }
+            description += `\n❌ No valid entries!`;
+            
             const embed = {
                 color: 0xff0000,
                 title: '🎉 GIVEAWAY ENDED 🎉',
-                description: `**Prize:** ${giveaway.prize}\n\n❌ No valid entries!`,
+                description: description,
                 footer: { text: 'Better luck next time!' }
             };
             await giveawayMessage.edit({ embeds: [embed] });
@@ -1748,10 +2175,16 @@ async function endGiveaway(messageId) {
         const validUsers = users.filter(user => !user.bot);
         
         if (validUsers.size === 0) {
+            let description = `**Prize:** ${giveaway.prize}\n`;
+            if (giveaway.coins) {
+                description += `**Coin Reward:** ${formatCoins(giveaway.coins)}\n`;
+            }
+            description += `\n❌ No valid entries!`;
+            
             const embed = {
                 color: 0xff0000,
                 title: '🎉 GIVEAWAY ENDED 🎉',
-                description: `**Prize:** ${giveaway.prize}\n\n❌ No valid entries!`,
+                description: description,
                 footer: { text: 'Better luck next time!' }
             };
             await giveawayMessage.edit({ embeds: [embed] });
@@ -1762,15 +2195,30 @@ async function endGiveaway(messageId) {
         const winnersArray = Array.from(validUsers.values());
         const winner = winnersArray[Math.floor(Math.random() * winnersArray.length)];
         
+        // Award coins to winner if specified
+        let coinMessage = '';
+        if (giveaway.coins) {
+            const winnerData = getUser(winner.id);
+            winnerData.coins += giveaway.coins;
+            saveUser(winner.id, winnerData);
+            coinMessage = `\n💰 **Bonus:** ${formatCoins(giveaway.coins)} added to your account!`;
+        }
+        
+        let description = `**Prize:** ${giveaway.prize}\n`;
+        if (giveaway.coins) {
+            description += `**Coin Reward:** ${formatCoins(giveaway.coins)}\n`;
+        }
+        description += `\n🏆 **Winner:** ${winner}\n\nCongratulations!`;
+        
         const winnerEmbed = {
             color: 0xffd700,
             title: '🎉 GIVEAWAY ENDED 🎉',
-            description: `**Prize:** ${giveaway.prize}\n\n🏆 **Winner:** ${winner}\n\nCongratulations!`,
+            description: description,
             footer: { text: 'Thanks to everyone who participated!' }
         };
         
         await giveawayMessage.edit({ embeds: [winnerEmbed] });
-        await giveawayMessage.reply(`🎉 Congratulations ${winner}! You won **${giveaway.prize}**!`);
+        await giveawayMessage.reply(`🎉 Congratulations ${winner}! You won **${giveaway.prize}**!${coinMessage}`);
         
         activeGiveaways.delete(messageId);
     } catch (error) {
