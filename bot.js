@@ -48,7 +48,7 @@ const DAILY_REWARD = 100;
 const WORK_COOLDOWN = 30 * 60 * 1000; // 30 minutes
 
 // Admin system
-const adminUsers = ['YOUR_USER_ID_HERE']; // Add your Discord user ID here
+const adminUsers = ['1373236660904656957']; // Aktus admin user
 const shopSettings = {
     notificationChannelId: null,
     sendPurchaseNotifications: false,
