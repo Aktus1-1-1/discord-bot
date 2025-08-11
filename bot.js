@@ -47,6 +47,14 @@ const userEconomy = new Map(); // Stores user data: { userId: { coins, dailyLast
 const DAILY_REWARD = 100;
 const WORK_COOLDOWN = 30 * 60 * 1000; // 30 minutes
 
+// Admin system
+const adminUsers = ['YOUR_USER_ID_HERE']; // Add your Discord user ID here
+const shopSettings = {
+    notificationChannelId: null,
+    sendPurchaseNotifications: false,
+    sendNewItemNotifications: true
+};
+
 // Shop items
 const shopItems = [
     { id: 'coffee', name: 'Coffee', price: 25, emoji: '☕', description: 'A nice cup of coffee' },
@@ -111,6 +119,14 @@ function formatDuration(ms) {
     if (seconds > 0) result.push(`${seconds}s`);
     
     return result.join(' ') || '0s';
+}
+
+function isAdmin(userId) {
+    return adminUsers.includes(userId);
+}
+
+function generateItemId(name) {
+    return name.toLowerCase().replace(/[^a-z0-9]/g, '');
 }
 
 function parseDuration(durationStr) {
@@ -719,6 +735,76 @@ const commands = [
             option.setName('user')
                 .setDescription('User to view inventory of')
                 .setRequired(false)),
+        
+    new SlashCommandBuilder()
+        .setName('shopadmin')
+        .setDescription('Shop administration (Admin only)')
+        .addSubcommand(subcommand =>
+            subcommand
+                .setName('add')
+                .setDescription('Add new item to shop')
+                .addStringOption(option =>
+                    option.setName('name')
+                        .setDescription('Item name')
+                        .setRequired(true))
+                .addIntegerOption(option =>
+                    option.setName('price')
+                        .setDescription('Item price in coins')
+                        .setRequired(true))
+                .addStringOption(option =>
+                    option.setName('emoji')
+                        .setDescription('Item emoji')
+                        .setRequired(true))
+                .addStringOption(option =>
+                    option.setName('description')
+                        .setDescription('Item description')
+                        .setRequired(true)))
+        .addSubcommand(subcommand =>
+            subcommand
+                .setName('remove')
+                .setDescription('Remove item from shop')
+                .addStringOption(option =>
+                    option.setName('item')
+                        .setDescription('Item to remove')
+                        .setRequired(true)))
+        .addSubcommand(subcommand =>
+            subcommand
+                .setName('edit')
+                .setDescription('Edit existing item')
+                .addStringOption(option =>
+                    option.setName('item')
+                        .setDescription('Item to edit')
+                        .setRequired(true))
+                .addStringOption(option =>
+                    option.setName('field')
+                        .setDescription('Field to edit')
+                        .setRequired(true)
+                        .addChoices(
+                            { name: 'Name', value: 'name' },
+                            { name: 'Price', value: 'price' },
+                            { name: 'Emoji', value: 'emoji' },
+                            { name: 'Description', value: 'description' }
+                        ))
+                .addStringOption(option =>
+                    option.setName('value')
+                        .setDescription('New value')
+                        .setRequired(true)))
+        .addSubcommand(subcommand =>
+            subcommand
+                .setName('settings')
+                .setDescription('Configure shop notifications')
+                .addChannelOption(option =>
+                    option.setName('channel')
+                        .setDescription('Notification channel')
+                        .setRequired(false))
+                .addBooleanOption(option =>
+                    option.setName('purchase_notifications')
+                        .setDescription('Send purchase notifications')
+                        .setRequired(false))
+                .addBooleanOption(option =>
+                    option.setName('new_item_notifications')
+                        .setDescription('Send new item notifications')
+                        .setRequired(false))),
         
     new SlashCommandBuilder()
         .setName('gamble')
@@ -2066,6 +2152,24 @@ client.on('interactionCreate', async (interaction) => {
             
             saveUser(interaction.user.id, userData);
             
+            // Send purchase notification if enabled
+            if (shopSettings.sendPurchaseNotifications && shopSettings.notificationChannelId) {
+                try {
+                    const notificationChannel = await client.channels.fetch(shopSettings.notificationChannelId);
+                    if (notificationChannel) {
+                        const embed = {
+                            color: 0x00ff00,
+                            title: '🛒 New Purchase',
+                            description: `**${interaction.user.username}** purchased ${item.emoji} **${item.name}** for ${formatCoins(item.price)}`,
+                            timestamp: new Date().toISOString()
+                        };
+                        await notificationChannel.send({ embeds: [embed] });
+                    }
+                } catch (error) {
+                    console.error('Error sending purchase notification:', error);
+                }
+            }
+            
             await interaction.reply({
                 content: `✅ Successfully purchased ${item.emoji} **${item.name}** for ${formatCoins(item.price)}!\n💰 Remaining balance: ${formatCoins(userData.coins)}`
             });
@@ -2100,6 +2204,185 @@ client.on('interactionCreate', async (interaction) => {
             };
             
             await interaction.reply({ embeds: [embed] });
+        }
+        
+        else if (commandName === 'shopadmin') {
+            if (!isAdmin(interaction.user.id)) {
+                await interaction.reply({
+                    content: '❌ You do not have permission to use this command.',
+                    ephemeral: true
+                });
+                return;
+            }
+            
+            const subcommand = interaction.options.getSubcommand();
+            
+            if (subcommand === 'add') {
+                const name = interaction.options.getString('name');
+                const price = interaction.options.getInteger('price');
+                const emoji = interaction.options.getString('emoji');
+                const description = interaction.options.getString('description');
+                const itemId = generateItemId(name);
+                
+                if (price < 1) {
+                    await interaction.reply({
+                        content: '❌ Price must be at least 1 coin.',
+                        ephemeral: true
+                    });
+                    return;
+                }
+                
+                if (shopItems.find(item => item.id === itemId)) {
+                    await interaction.reply({
+                        content: '❌ An item with that name already exists.',
+                        ephemeral: true
+                    });
+                    return;
+                }
+                
+                const newItem = { id: itemId, name, price, emoji, description };
+                shopItems.push(newItem);
+                
+                // Send new item notification if enabled
+                if (shopSettings.sendNewItemNotifications && shopSettings.notificationChannelId) {
+                    try {
+                        const notificationChannel = await client.channels.fetch(shopSettings.notificationChannelId);
+                        if (notificationChannel) {
+                            const embed = {
+                                color: 0x0099ff,
+                                title: '🆕 New Shop Item Added',
+                                description: `${emoji} **${name}**\n*${description}*\n**Price:** ${formatCoins(price)}`,
+                                footer: { text: `Added by ${interaction.user.username}` },
+                                timestamp: new Date().toISOString()
+                            };
+                            await notificationChannel.send({ embeds: [embed] });
+                        }
+                    } catch (error) {
+                        console.error('Error sending new item notification:', error);
+                    }
+                }
+                
+                await interaction.reply({
+                    content: `✅ Successfully added ${emoji} **${name}** to the shop for ${formatCoins(price)}!`
+                });
+            }
+            
+            else if (subcommand === 'remove') {
+                const itemName = interaction.options.getString('item');
+                const itemIndex = shopItems.findIndex(item => 
+                    item.name.toLowerCase() === itemName.toLowerCase() || 
+                    item.id === itemName.toLowerCase()
+                );
+                
+                if (itemIndex === -1) {
+                    await interaction.reply({
+                        content: '❌ Item not found.',
+                        ephemeral: true
+                    });
+                    return;
+                }
+                
+                const removedItem = shopItems[itemIndex];
+                shopItems.splice(itemIndex, 1);
+                
+                await interaction.reply({
+                    content: `✅ Successfully removed ${removedItem.emoji} **${removedItem.name}** from the shop.`
+                });
+            }
+            
+            else if (subcommand === 'edit') {
+                const itemName = interaction.options.getString('item');
+                const field = interaction.options.getString('field');
+                const value = interaction.options.getString('value');
+                
+                const item = shopItems.find(item => 
+                    item.name.toLowerCase() === itemName.toLowerCase() || 
+                    item.id === itemName.toLowerCase()
+                );
+                
+                if (!item) {
+                    await interaction.reply({
+                        content: '❌ Item not found.',
+                        ephemeral: true
+                    });
+                    return;
+                }
+                
+                const oldValue = item[field];
+                
+                if (field === 'price') {
+                    const newPrice = parseInt(value);
+                    if (isNaN(newPrice) || newPrice < 1) {
+                        await interaction.reply({
+                            content: '❌ Price must be a number greater than 0.',
+                            ephemeral: true
+                        });
+                        return;
+                    }
+                    item.price = newPrice;
+                } else if (field === 'name') {
+                    item.name = value;
+                    item.id = generateItemId(value);
+                } else {
+                    item[field] = value;
+                }
+                
+                await interaction.reply({
+                    content: `✅ Successfully updated ${item.emoji} **${item.name}**\n**${field}:** ${oldValue} → ${field === 'price' ? formatCoins(item[field]) : item[field]}`
+                });
+            }
+            
+            else if (subcommand === 'settings') {
+                const channel = interaction.options.getChannel('channel');
+                const purchaseNotifications = interaction.options.getBoolean('purchase_notifications');
+                const newItemNotifications = interaction.options.getBoolean('new_item_notifications');
+                
+                let changes = [];
+                
+                if (channel !== null) {
+                    shopSettings.notificationChannelId = channel.id;
+                    changes.push(`Notification channel set to ${channel}`);
+                }
+                
+                if (purchaseNotifications !== null) {
+                    shopSettings.sendPurchaseNotifications = purchaseNotifications;
+                    changes.push(`Purchase notifications ${purchaseNotifications ? 'enabled' : 'disabled'}`);
+                }
+                
+                if (newItemNotifications !== null) {
+                    shopSettings.sendNewItemNotifications = newItemNotifications;
+                    changes.push(`New item notifications ${newItemNotifications ? 'enabled' : 'disabled'}`);
+                }
+                
+                if (changes.length === 0) {
+                    const embed = {
+                        color: 0x0099ff,
+                        title: '⚙️ Shop Settings',
+                        fields: [
+                            {
+                                name: 'Notification Channel',
+                                value: shopSettings.notificationChannelId ? `<#${shopSettings.notificationChannelId}>` : 'Not set',
+                                inline: true
+                            },
+                            {
+                                name: 'Purchase Notifications',
+                                value: shopSettings.sendPurchaseNotifications ? '✅ Enabled' : '❌ Disabled',
+                                inline: true
+                            },
+                            {
+                                name: 'New Item Notifications',
+                                value: shopSettings.sendNewItemNotifications ? '✅ Enabled' : '❌ Disabled',
+                                inline: true
+                            }
+                        ]
+                    };
+                    await interaction.reply({ embeds: [embed], ephemeral: true });
+                } else {
+                    await interaction.reply({
+                        content: `✅ Shop settings updated:\n${changes.map(change => `• ${change}`).join('\n')}`
+                    });
+                }
+            }
         }
         
         else if (commandName === 'gamble') {
