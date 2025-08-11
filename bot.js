@@ -43,9 +43,23 @@ const activeReminders = new Map();
 const activeTimers = new Map();
 
 // Economy system
-const userEconomy = new Map(); // Stores user data: { userId: { coins, dailyLastClaimed, workLastUsed, job } }
+const userEconomy = new Map(); // Stores user data: { userId: { coins, dailyLastClaimed, workLastUsed, job, inventory } }
 const DAILY_REWARD = 100;
 const WORK_COOLDOWN = 30 * 60 * 1000; // 30 minutes
+
+// Shop items
+const shopItems = [
+    { id: 'coffee', name: 'Coffee', price: 25, emoji: '☕', description: 'A nice cup of coffee' },
+    { id: 'pizza', name: 'Pizza', price: 50, emoji: '🍕', description: 'Delicious pizza slice' },
+    { id: 'crown', name: 'Crown', price: 500, emoji: '👑', description: 'Royal crown for VIPs' },
+    { id: 'car', name: 'Car', price: 2000, emoji: '🚗', description: 'Your own car!' },
+    { id: 'house', name: 'House', price: 5000, emoji: '🏠', description: 'A beautiful house' },
+    { id: 'diamond', name: 'Diamond', price: 1000, emoji: '💎', description: 'Shiny diamond' },
+    { id: 'laptop', name: 'Laptop', price: 800, emoji: '💻', description: 'Gaming laptop' },
+    { id: 'phone', name: 'Phone', price: 400, emoji: '📱', description: 'Latest smartphone' },
+    { id: 'watch', name: 'Watch', price: 300, emoji: '⌚', description: 'Luxury watch' },
+    { id: 'medal', name: 'Medal', price: 150, emoji: '🏅', description: 'Achievement medal' }
+];
 
 const jobs = [
     { name: 'Pizza Delivery', minPay: 15, maxPay: 35, emoji: '🍕' },
@@ -64,7 +78,8 @@ function getUser(userId) {
             coins: 50, // starting coins
             dailyLastClaimed: null,
             workLastUsed: null,
-            job: null
+            job: null,
+            inventory: {}
         });
     }
     return userEconomy.get(userId);
@@ -681,6 +696,29 @@ const commands = [
     new SlashCommandBuilder()
         .setName('leaderboard')
         .setDescription('Show richest users'),
+        
+    new SlashCommandBuilder()
+        .setName('shop')
+        .setDescription('Browse the shop'),
+        
+    new SlashCommandBuilder()
+        .setName('buy')
+        .setDescription('Buy an item from the shop')
+        .addStringOption(option =>
+            option.setName('item')
+                .setDescription('Item to buy')
+                .setRequired(true)
+                .addChoices(
+                    ...shopItems.map(item => ({ name: `${item.emoji} ${item.name} - ${item.price} coins`, value: item.id }))
+                )),
+                
+    new SlashCommandBuilder()
+        .setName('inventory')
+        .setDescription('View your inventory')
+        .addUserOption(option =>
+            option.setName('user')
+                .setDescription('User to view inventory of')
+                .setRequired(false)),
         
     new SlashCommandBuilder()
         .setName('gamble')
@@ -1977,6 +2015,88 @@ client.on('interactionCreate', async (interaction) => {
                     const medal = index === 0 ? '🥇' : index === 1 ? '🥈' : index === 2 ? '🥉' : `${index + 1}.`;
                     return `${medal} <@${user[0]}> - ${formatCoins(user[1].coins)}`;
                 }).join('\n')
+            };
+            
+            await interaction.reply({ embeds: [embed] });
+        }
+        
+        else if (commandName === 'shop') {
+            const embed = {
+                color: 0x0099ff,
+                title: '🛒 Shop',
+                description: 'Welcome to the shop! Use `/buy` to purchase items.',
+                fields: shopItems.map(item => ({
+                    name: `${item.emoji} ${item.name}`,
+                    value: `${formatCoins(item.price)}\n*${item.description}*`,
+                    inline: true
+                })),
+                footer: { text: 'Use /buy <item> to purchase items' }
+            };
+            
+            await interaction.reply({ embeds: [embed] });
+        }
+        
+        else if (commandName === 'buy') {
+            const itemId = interaction.options.getString('item');
+            const item = shopItems.find(i => i.id === itemId);
+            const userData = getUser(interaction.user.id);
+            
+            if (!item) {
+                await interaction.reply({
+                    content: '❌ Item not found!',
+                    ephemeral: true
+                });
+                return;
+            }
+            
+            if (userData.coins < item.price) {
+                await interaction.reply({
+                    content: `❌ You don't have enough coins! You need ${formatCoins(item.price)} but have ${formatCoins(userData.coins)}.`,
+                    ephemeral: true
+                });
+                return;
+            }
+            
+            // Add to inventory
+            if (!userData.inventory[itemId]) {
+                userData.inventory[itemId] = 0;
+            }
+            userData.inventory[itemId]++;
+            userData.coins -= item.price;
+            
+            saveUser(interaction.user.id, userData);
+            
+            await interaction.reply({
+                content: `✅ Successfully purchased ${item.emoji} **${item.name}** for ${formatCoins(item.price)}!\n💰 Remaining balance: ${formatCoins(userData.coins)}`
+            });
+        }
+        
+        else if (commandName === 'inventory') {
+            const targetUser = interaction.options.getUser('user') || interaction.user;
+            const userData = getUser(targetUser.id);
+            
+            if (!userData.inventory || Object.keys(userData.inventory).length === 0) {
+                await interaction.reply({
+                    content: `📦 ${targetUser.id === interaction.user.id ? 'Your' : `${targetUser.username}'s`} inventory is empty!`,
+                    ephemeral: true
+                });
+                return;
+            }
+            
+            const inventoryItems = Object.entries(userData.inventory)
+                .filter(([itemId, count]) => count > 0)
+                .map(([itemId, count]) => {
+                    const item = shopItems.find(i => i.id === itemId);
+                    if (!item) return null;
+                    return `${item.emoji} **${item.name}** x${count}`;
+                })
+                .filter(item => item !== null);
+                
+            const embed = {
+                color: 0x8b4513,
+                title: `📦 ${targetUser.username}'s Inventory`,
+                description: inventoryItems.length > 0 ? inventoryItems.join('\n') : 'No items found',
+                footer: { text: `Total items: ${Object.values(userData.inventory).reduce((sum, count) => sum + count, 0)}` }
             };
             
             await interaction.reply({ embeds: [embed] });

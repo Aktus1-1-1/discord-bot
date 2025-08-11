@@ -7,7 +7,7 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify({
         status: 'Bot is running!',
         uptime: process.uptime(),
-        commands: 42
+        commands: 45
     }));
 });
 
